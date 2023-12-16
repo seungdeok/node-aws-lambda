@@ -1,0 +1,73 @@
+version: 2.1
+
+parameters:
+  aws-access-key-id:
+    type: string
+    default: AWS_ACCESS_KEY_ID
+  aws-region:
+    type: string
+    default: AWS_REGION
+  aws-secret-access-key:
+    type: string
+    default: AWS_SECRET_ACCESS_KEY
+  aws-lambda-function-name:
+    type: string
+    default: "nodejs-aws"
+
+orbs:
+  aws-s3: circleci/aws-s3@3.0.0
+  aws-cli: circleci/aws-cli@2.0.3
+
+jobs:
+  CI:
+    docker:
+      - image: cimg/node:14.19.0
+    steps:
+      - checkout
+      - run: node --version
+      - restore_cache:
+          key: dependency-cache-{{ checksum "package-lock.json" }}
+      - run:
+          name: Install Dependencies
+          command: npm install
+      - save_cache:
+          key: dependency-cache-{{ checksum "package-lock.json" }}
+          paths:
+            - ./node_modules
+      - run:
+          name: Run lint
+          command: npm run lint
+      - run:
+          name: Run tests
+          command: npm run test
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+
+  CD:
+    executor: aws-cli/default
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Compress Zip File
+          command: zip output.zip handler.js src/
+      - aws-cli/setup:
+          aws-access-key-id: << pipeline.parameters.aws-access-key-id >>
+          aws-region: << pipeline.parameters.aws-region >>
+          aws-secret-access-key: << pipeline.parameters.aws-secret-access-key >>
+      - run:
+          name: Deploy to Lambda
+          command: aws lambda update-function-code --function-name << pipeline.parameters.aws-lambda-function-name >> --zip-file fileb://output.zip
+
+workflows:
+  node-workflow:
+    jobs:
+      - CI
+      - CD:
+          requires:
+            - CI
+          filters:
+            branches:
+              only: main
